@@ -1,17 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getPricingSnapshot } from "@/lib/pricing-data";
 import type { AuditResult } from "@/types";
 
 /**
  * POST /api/audit
  * Persists an audit result to Supabase for shareable URLs.
- * Non-critical — the app works without this if Supabase is down or unconfigured.
+ * Round 2: also stores pricing_snapshot so we can detect when prices change.
  */
 export async function POST(req: NextRequest) {
   try {
-    const result: AuditResult = await req.json();
+    const body = await req.json();
+    const result: AuditResult = body;
 
-    // If Supabase is not configured, silently succeed
     if (
       !process.env.NEXT_PUBLIC_SUPABASE_URL ||
       !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -29,6 +30,8 @@ export async function POST(req: NextRequest) {
       total_annual_savings: result.totalAnnualSavings,
       credex_savings_estimate: result.credexSavingsEstimate,
       ai_summary: result.aiSummary || "",
+      // Round 2: snapshot the pricing used at audit time
+      pricing_snapshot: getPricingSnapshot(),
     });
 
     if (error) {
@@ -80,9 +83,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Audit not found" }, { status: 404 });
   }
 
-  // Strip any PII — return only what's needed for the public share view
   return NextResponse.json({
     id: data.id,
+    input: data.input,
     recommendations: data.recommendations,
     totalCurrentSpend: data.total_current_spend,
     totalOptimizedSpend: data.total_optimized_spend,

@@ -1,6 +1,7 @@
 import {
   AuditInput,
   AuditResult,
+  AITool,
   ToolEntry,
   ToolRecommendation,
   RecommendationAction,
@@ -9,15 +10,30 @@ import {
 import { AI_TOOLS, getToolById, CREDEX_DISCOUNT_RATE } from "./pricing-data";
 import { v4 as uuidv4 } from "uuid";
 
+/** Looks up a tool by ID from a provided tools array (or falls back to default). */
+function getToolFrom(
+  id: string,
+  tools: AITool[]
+): AITool | undefined {
+  return tools.find((t) => t.id === id);
+}
+
 // ─── Rule Engine ───
 
 /**
  * Core audit logic. Hardcoded rules, not AI — knowing when NOT to use AI
  * is part of the test. Each rule is defensible and usage-fit based.
  */
-export function runAudit(input: AuditInput): AuditResult {
+/**
+ * Core audit logic.
+ * @param input - The user's tool stack and team info.
+ * @param customTools - Optional: pass a modified tools list (e.g. with price overrides applied)
+ *                      for the re-audit diff view. Defaults to the static AI_TOOLS.
+ */
+export function runAudit(input: AuditInput, customTools?: AITool[]): AuditResult {
+  const tools = customTools ?? AI_TOOLS;
   const recommendations: ToolRecommendation[] = input.tools.map((entry) =>
-    evaluateTool(entry, input.teamSize, input.primaryUseCase)
+    evaluateTool(entry, input.teamSize, input.primaryUseCase, tools)
   );
 
   const totalCurrentSpend = recommendations.reduce(
@@ -56,9 +72,10 @@ export function runAudit(input: AuditInput): AuditResult {
 function evaluateTool(
   entry: ToolEntry,
   teamSize: number,
-  useCase: UseCase
+  useCase: UseCase,
+  tools: AITool[] = AI_TOOLS
 ): ToolRecommendation {
-  const tool = getToolById(entry.toolId);
+  const tool = getToolFrom(entry.toolId, tools);
   if (!tool) {
     return makeKeepRec(entry, "Unknown tool — no recommendation available.");
   }
@@ -128,7 +145,8 @@ function evaluateTool(
     entry,
     currentPlan,
     teamSize,
-    useCase
+    useCase,
+    tools
   );
   if (alternative) {
     return alternative;
@@ -233,9 +251,10 @@ function findCheaperAlternative(
   entry: ToolEntry,
   currentPlan: typeof AI_TOOLS[number]["plans"][number],
   teamSize: number,
-  useCase: UseCase
+  useCase: UseCase,
+  tools: AITool[] = AI_TOOLS
 ): ToolRecommendation | null {
-  const tool = getToolById(entry.toolId)!;
+  const tool = getToolFrom(entry.toolId, tools)!;
   const currentSpend = entry.monthlySpend;
   const seats = entry.seats;
 
@@ -364,9 +383,10 @@ function makeKeepRec(
   entry: ToolEntry,
   reason: string,
   toolName?: string,
-  planName?: string
+  planName?: string,
+  tools: AITool[] = AI_TOOLS
 ): ToolRecommendation {
-  const tool = getToolById(entry.toolId);
+  const tool = getToolFrom(entry.toolId, tools);
   const currentPlan = tool?.plans.find((p) => p.id === entry.planId);
   return {
     toolId: entry.toolId,

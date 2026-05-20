@@ -6,6 +6,61 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 /**
+ * Service-role client — bypasses RLS for admin operations.
+ * Only use in API routes (server-side), never in client components.
+ */
+export const supabaseAdmin = createClient(
+  supabaseUrl,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseAnonKey
+);
+
+/**
+ * ── ROUND 2 MIGRATION ──
+ * Run this in Supabase SQL Editor after the Round 1 migration:
+ *
+ * ALTER TABLE audits ADD COLUMN IF NOT EXISTS user_email TEXT;
+ * ALTER TABLE audits ADD COLUMN IF NOT EXISTS pricing_snapshot JSONB;
+ *
+ * CREATE TABLE IF NOT EXISTS pricing_overrides (
+ *   plan_id TEXT PRIMARY KEY,
+ *   tool_id TEXT NOT NULL,
+ *   price_per_seat NUMERIC NOT NULL,
+ *   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ * );
+ * ALTER TABLE pricing_overrides ENABLE ROW LEVEL SECURITY;
+ * CREATE POLICY "Allow anon read pricing_overrides" ON pricing_overrides FOR SELECT USING (true);
+ * CREATE POLICY "Allow service role all pricing_overrides" ON pricing_overrides FOR ALL USING (true);
+ *
+ * -- Allow service role to update audits (for backfilling user_email)
+ * CREATE POLICY "Allow service role update audits" ON audits FOR UPDATE USING (true);
+ *
+ * ── BONUS FEATURES MIGRATION ──
+ * Run after the Round 2 migration above:
+ *
+ * -- Unsubscribe support on leads
+ * ALTER TABLE leads ADD COLUMN IF NOT EXISTS unsubscribe_token TEXT UNIQUE DEFAULT gen_random_uuid()::text;
+ * ALTER TABLE leads ADD COLUMN IF NOT EXISTS unsubscribed BOOLEAN NOT NULL DEFAULT false;
+ *
+ * -- Pricing change history (powers the public changelog page)
+ * CREATE TABLE IF NOT EXISTS pricing_changes (
+ *   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ *   plan_id TEXT NOT NULL,
+ *   tool_id TEXT NOT NULL,
+ *   tool_name TEXT NOT NULL,
+ *   plan_name TEXT NOT NULL,
+ *   old_price NUMERIC NOT NULL,
+ *   new_price NUMERIC NOT NULL,
+ *   detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ * );
+ * ALTER TABLE pricing_changes ENABLE ROW LEVEL SECURITY;
+ * CREATE POLICY "Allow anon read pricing_changes" ON pricing_changes FOR SELECT USING (true);
+ * CREATE POLICY "Allow service role all pricing_changes" ON pricing_changes FOR ALL USING (true);
+ *
+ * -- Allow service role to read and update leads (for unsubscribe)
+ * CREATE POLICY "Allow service role read leads" ON leads FOR SELECT USING (true);
+ * CREATE POLICY "Allow service role update leads" ON leads FOR UPDATE USING (true);
+ *
+ * ── ROUND 1 SQL (original) ──
  * SQL to run in Supabase SQL Editor to create the required tables:
  *
  * -- Audit results (for shareable URLs)
