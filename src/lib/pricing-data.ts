@@ -472,3 +472,55 @@ export function getPlan(
  * Conservative estimate based on the assignment brief.
  */
 export const CREDEX_DISCOUNT_RATE = 0.15; // 15% additional savings on eligible tools
+
+/**
+ * Returns a flat map of { planId → pricePerSeat } for the current pricing data.
+ * Stored as the pricing_snapshot on each saved audit so we can detect future changes.
+ */
+export function getPricingSnapshot(): Record<string, number> {
+  const snapshot: Record<string, number> = {};
+  for (const tool of AI_TOOLS) {
+    for (const plan of tool.plans) {
+      snapshot[plan.id] = plan.pricePerSeat;
+    }
+  }
+  return snapshot;
+}
+
+/**
+ * Returns a copy of AI_TOOLS with price overrides applied.
+ * Overrides: { planId → newPrice }
+ */
+export function applyPricingOverrides(
+  overrides: Record<string, number>
+): typeof AI_TOOLS {
+  if (Object.keys(overrides).length === 0) return AI_TOOLS;
+  return AI_TOOLS.map((tool) => ({
+    ...tool,
+    plans: tool.plans.map((plan) => ({
+      ...plan,
+      pricePerSeat:
+        plan.id in overrides ? overrides[plan.id] : plan.pricePerSeat,
+    })),
+  }));
+}
+
+/**
+ * Compares a stored pricing snapshot against a current snapshot and
+ * returns an array of changes (planId, oldPrice, newPrice).
+ */
+export function diffPricingSnapshots(
+  stored: Record<string, number>,
+  current: Record<string, number>
+): Array<{ planId: string; oldPrice: number; newPrice: number }> {
+  const changes: Array<{ planId: string; oldPrice: number; newPrice: number }> =
+    [];
+  for (const planId of Object.keys(stored)) {
+    const oldPrice = stored[planId];
+    const newPrice = current[planId];
+    if (newPrice !== undefined && newPrice !== oldPrice) {
+      changes.push({ planId, oldPrice, newPrice });
+    }
+  }
+  return changes;
+}

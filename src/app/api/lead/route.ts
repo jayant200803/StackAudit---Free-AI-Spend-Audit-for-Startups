@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseAdmin } from "@/lib/supabase";
 import { z } from "zod";
 
 const LeadSchema = z.object({
@@ -81,6 +81,13 @@ export async function POST(req: NextRequest) {
         console.error("Supabase lead insert error:", error);
         // Don't block the user — log and continue
       }
+
+      // Round 2: backfill user_email on the audit row so detect-changes can
+      // find all audits that belong to a real user.
+      await supabaseAdmin
+        .from("audits")
+        .update({ user_email: lead.email })
+        .eq("id", lead.auditId);
     }
 
     // Send transactional email via Resend (if configured)
