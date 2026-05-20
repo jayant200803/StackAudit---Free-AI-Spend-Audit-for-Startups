@@ -20,7 +20,9 @@ interface StoredAudit {
 
 interface PriceChange {
   planId: string;
+  toolId: string;
   toolName: string;
+  planName: string;
   oldPrice: number;
   newPrice: number;
   delta: number;
@@ -33,6 +35,10 @@ interface PriceChange {
  * For each audit, compares the stored snapshot to current pricing.
  * Groups affected audits by email and sends one consolidated notification
  * per user — never multiple emails for the same user.
+ *
+ * Skips users who have unsubscribed (leads.unsubscribed = true).
+ * Saves all detected price changes to the pricing_changes log table.
+ * Includes a one-click unsubscribe link in every notification email.
  *
  * Also protected by ADMIN_SECRET (same header as update-pricing).
  *
@@ -77,7 +83,27 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 3. Detect affected audits
+  // 3. Load unsubscribe info for all emails that appear in audits
+  const allEmails = Array.from(new Set((audits as StoredAudit[]).map((a) => a.user_email)));
+  const { data: leadsData } = await supabaseAdmin
+    .from("leads")
+    .select("email, unsubscribe_token, unsubscribed")
+    .in("email", allEmails);
+
+  // Build a quick lookup: email → { token, unsubscribed }
+  const leadsByEmail = new Map<string, { token: string | null; unsubscribed: boolean }>();
+  for (const lead of leadsData ?? []) {
+    // If the same email appears in multiple lead rows, prefer unsubscribed=true
+    const existing = leadsByEmail.get(lead.email);
+    if (!existing || lead.unsubscribed) {
+      leadsByEmail.set(lead.email, {
+        token: lead.unsubscribe_token ?? null,
+        unsubscribed: lead.unsubscribed ?? false,
+      });
+    }
+  }
+
+  // 4. Detect affected audits
   type AffectedEntry = {
     audit: StoredAudit;
     priceChanges: PriceChange[];
@@ -100,15 +126,17 @@ export async function POST(req: NextRequest) {
     const relevantChanges = rawChanges.filter((c) => usedPlanIds.has(c.planId));
     if (relevantChanges.length === 0) continue;
 
-    // Map planId → tool name for email readability
+    // Map planId → tool name / plan name for email readability
     const priceChanges: PriceChange[] = relevantChanges.map((c) => {
-      const tool = currentTools.find((t) =>
-        t.plans.some((p) => p.id === c.planId)
-      ) ?? AI_TOOLS.find((t) => t.plans.some((p) => p.id === c.planId));
+      const tool =
+        currentTools.find((t) => t.plans.some((p) => p.id === c.planId)) ??
+        AI_TOOLS.find((t) => t.plans.some((p) => p.id === c.planId));
       const plan = tool?.plans.find((p) => p.id === c.planId);
       return {
         planId: c.planId,
+        toolId: tool?.id ?? c.planId,
         toolName: tool?.name ?? c.planId,
+        planName: plan?.name ?? c.planId,
         oldPrice: c.oldPrice,
         newPrice: c.newPrice,
         delta: c.newPrice - c.oldPrice,
@@ -131,12 +159,44 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // 4. Send one consolidated email per affected user
+  // 5. Persist all unique price changes to the pricing_changes log
+  const allUniqueChanges = new Map<string, PriceChange>();
+  for (const entries of Array.from(affectedByEmail.values())) {
+    for (const entry of entries) {
+      for (const c of entry.priceChanges) {
+        allUniqueChanges.set(c.planId, c);
+      }
+    }
+  }
+
+  if (allUniqueChanges.size > 0) {
+    const changeRows = Array.from(allUniqueChanges.values()).map((c) => ({
+      plan_id: c.planId,
+      tool_id: c.toolId,
+      tool_name: c.toolName,
+      plan_name: c.planName,
+      old_price: c.oldPrice,
+      new_price: c.newPrice,
+    }));
+    // Best-effort: if pricing_changes table doesn't exist yet, swallow the error
+    await supabaseAdmin.from("pricing_changes").insert(changeRows);
+  }
+
+  // 6. Send one consolidated email per affected user (skip unsubscribed)
   let emailsSent = 0;
   const allChangeSummaries: string[] = [];
 
   for (const [email, entries] of Array.from(affectedByEmail.entries())) {
-    const sent = await sendReauditEmail(email, entries, APP_URL);
+    const leadInfo = leadsByEmail.get(email);
+
+    // Skip users who have opted out
+    if (leadInfo?.unsubscribed) continue;
+
+    const unsubscribeUrl = leadInfo?.token
+      ? `${APP_URL}/api/unsubscribe?token=${leadInfo.token}`
+      : null;
+
+    const sent = await sendReauditEmail(email, entries, APP_URL, unsubscribeUrl);
     if (sent) emailsSent++;
 
     for (const entry of entries) {
@@ -167,7 +227,8 @@ async function sendReauditEmail(
     newRecommendations: ToolRecommendation[];
     newTotalSavings: number;
   }>,
-  appUrl: string
+  appUrl: string,
+  unsubscribeUrl: string | null
 ): Promise<boolean> {
   if (!RESEND_API_KEY) return false;
 
@@ -220,6 +281,10 @@ async function sendReauditEmail(
     })
     .join("");
 
+  const unsubscribeHtml = unsubscribeUrl
+    ? `<br/><a href="${unsubscribeUrl}" style="color:#94a3b8;">Unsubscribe from pricing alerts</a>`
+    : "";
+
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -250,6 +315,7 @@ async function sendReauditEmail(
             <p style="color:#94a3b8;font-size:12px;margin:0;">
               StackAudit by <a href="https://credex.rocks" style="color:#94a3b8;">Credex</a> — discounted AI infrastructure credits for startups.<br/>
               You received this because you submitted your email for an AI spend audit.
+              ${unsubscribeHtml}
             </p>
           </div>
         `,

@@ -34,6 +34,32 @@ export const supabaseAdmin = createClient(
  * -- Allow service role to update audits (for backfilling user_email)
  * CREATE POLICY "Allow service role update audits" ON audits FOR UPDATE USING (true);
  *
+ * ── BONUS FEATURES MIGRATION ──
+ * Run after the Round 2 migration above:
+ *
+ * -- Unsubscribe support on leads
+ * ALTER TABLE leads ADD COLUMN IF NOT EXISTS unsubscribe_token TEXT UNIQUE DEFAULT gen_random_uuid()::text;
+ * ALTER TABLE leads ADD COLUMN IF NOT EXISTS unsubscribed BOOLEAN NOT NULL DEFAULT false;
+ *
+ * -- Pricing change history (powers the public changelog page)
+ * CREATE TABLE IF NOT EXISTS pricing_changes (
+ *   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ *   plan_id TEXT NOT NULL,
+ *   tool_id TEXT NOT NULL,
+ *   tool_name TEXT NOT NULL,
+ *   plan_name TEXT NOT NULL,
+ *   old_price NUMERIC NOT NULL,
+ *   new_price NUMERIC NOT NULL,
+ *   detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ * );
+ * ALTER TABLE pricing_changes ENABLE ROW LEVEL SECURITY;
+ * CREATE POLICY "Allow anon read pricing_changes" ON pricing_changes FOR SELECT USING (true);
+ * CREATE POLICY "Allow service role all pricing_changes" ON pricing_changes FOR ALL USING (true);
+ *
+ * -- Allow service role to read and update leads (for unsubscribe)
+ * CREATE POLICY "Allow service role read leads" ON leads FOR SELECT USING (true);
+ * CREATE POLICY "Allow service role update leads" ON leads FOR UPDATE USING (true);
+ *
  * ── ROUND 1 SQL (original) ──
  * SQL to run in Supabase SQL Editor to create the required tables:
  *

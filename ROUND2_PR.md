@@ -38,8 +38,11 @@ User clicks link in email
 - `src/lib/pricing-data.ts` — added `getPricingSnapshot()`, `applyPricingOverrides()`, `diffPricingSnapshots()`
 - `src/app/api/admin/update-pricing/route.ts` — admin endpoint to set a price override
 - `src/app/api/detect-changes/route.ts` — detection + consolidated email sending
+- `src/app/api/unsubscribe/route.ts` — one-click unsubscribe: validates token, sets `leads.unsubscribed = true`
 - `src/app/reaudit/[id]/page.tsx` — server component: fetches audit, runs re-audit
 - `src/app/reaudit/[id]/ReauditClient.tsx` — client component: diff view UI
+- `src/app/changelog/page.tsx` — public pricing history; reads `pricing_changes` table (ISR, 5 min)
+- `src/app/admin/page.tsx` — admin dashboard at `/admin?secret=<ADMIN_SECRET>`; shows audit/lead counts, active overrides, recent changes log
 - `vercel.json` — Vercel Cron scheduled daily at 09:00 UTC
 
 **Modified files:**
@@ -50,17 +53,17 @@ User clicks link in email
 
 ## What I cut
 
-- **Unsubscribe link in emails** — the spec lists it as bonus. With 36 hours, the diff view was higher value. The email does include a plain-text note about why they received it. A one-click unsubscribe token (store in `leads.unsubscribe_token`, validate on GET /api/unsubscribe) is the obvious next addition.
-- **Public pricing changelog page** — bonus feature. The `/api/detect-changes` response body already returns a `changes` array that could power a public page; the page itself was cut.
-- **Admin dashboard** — bonus. The raw numbers (`checked`, `affected`, `emailsSent`) are returned in the API response and visible in Vercel logs. A UI wrapper was cut.
 - **Automated tests for new endpoints** — the core audit engine tests still pass. The new endpoints have more external dependencies (Supabase, Resend) that make unit testing heavier; integration tests would be the right approach and were the first thing I'd add with more time.
 - **Redis rate limiting on detect-changes** — the endpoint is admin-only (secret header) so abuse risk is low. In-memory rate limiting is not needed here.
+
+All three bonus features (unsubscribe, changelog, admin dashboard) are implemented.
 
 ## How to test manually
 
 **Setup (one-time):**
 1. Run the Round 2 SQL migration in Supabase SQL Editor (see `src/lib/supabase.ts` for the exact SQL)
-2. Add `SUPABASE_SERVICE_ROLE_KEY` and `ADMIN_SECRET` to `.env.local` and Vercel environment variables
+2. Run the Bonus Features migration (also in the same comment block in `supabase.ts`)
+3. Add `SUPABASE_SERVICE_ROLE_KEY` and `ADMIN_SECRET` to `.env.local` and Vercel environment variables
 
 **End-to-end flow:**
 1. Go to `https://aispend-audit.vercel.app` and submit an audit with Cursor Pro ($20/seat, 5 seats)
@@ -80,6 +83,11 @@ User clicks link in email
 6. Check your inbox — you should receive one email listing the Cursor price change and a "View Diff" link
 7. Click the link → lands on `/reaudit/[id]` showing old ($20) vs new ($25) with CHANGED badge on the Cursor row
 8. To reset: `DELETE /api/admin/update-pricing` with `{ "planId": "cursor-pro" }`
+
+**Bonus features:**
+- `/changelog` — public page showing all detected price changes (populated after step 5 above)
+- `/admin?secret=<ADMIN_SECRET>` — dashboard showing audit/lead counts, active overrides, and the recent change log
+- Unsubscribe: the notification email includes an "Unsubscribe from pricing alerts" link; clicking it calls `GET /api/unsubscribe?token=<token>` and sets `leads.unsubscribed = true` for that email
 
 ## What I tested
 
